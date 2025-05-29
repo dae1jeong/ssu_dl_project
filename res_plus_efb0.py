@@ -68,10 +68,15 @@ test_loader = DataLoader(test_set, batch_size=batch_size)
 class CombinedModel(nn.Module):
     def __init__(self, num_classes=100):
         super().__init__()
-        self.resnet = models.resnet34(pretrained=True)
+        self.resnet = models.resnet34(weights='DEFAULT')
+        # 7x7 conv를 3x3 conv로 교체
+        self.resnet.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.resnet.bn1 = nn.BatchNorm2d(64)
+        self.resnet.relu = nn.ReLU(inplace=True)
+        self.resnet.maxpool = nn.Identity()  # 3x3 conv일 때 maxpool 제거가 일반적
         self.resnet.fc = nn.Identity()
         self.efficient = timm.create_model("efficientnet_b0", pretrained=True, num_classes=0)
-        self.classifier = nn.Linear(self.resnet.fc.in_features + self.efficient.num_features, num_classes)
+        self.classifier = nn.Linear(512 + self.efficient.num_features, num_classes)
     def forward(self, x):
         r = self.resnet(x)
         e = self.efficient(x)
@@ -131,7 +136,18 @@ for epoch in range(epochs):
             loss = criterion(outputs, labels)
             val_loss += loss.item()
 
-    print(f"Epoch {epoch+1}: Train Acc: {train_acc:.2f}%, Val Loss: {val_loss:.4f}")
+        # test 정확도 계산
+        test_correct = 0
+        test_total = 0
+        for images, labels in test_loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            _, preds = outputs.max(1)
+            test_correct += (preds == labels).sum().item()
+            test_total += labels.size(0)
+        test_acc = test_correct / test_total * 100
+
+    print(f"Epoch {epoch+1}: Train Acc: {train_acc:.2f}%, Val Loss: {val_loss:.4f}, Test Acc: {test_acc:.2f}%")
     early_stopping(val_loss)
     if early_stopping.stop:
         print("Early stopping triggered.")
