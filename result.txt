@@ -1,0 +1,5 @@
+seed(o) , patience(5), decay(o), → 17epoch, acc:55%, loss:42
+
+seed(x) , patience(5), decay(o) → 12epoch, acc:50~%, loss:40~
+
+seed(o), patience(7), decay(o) → 60epoch, acc:80%, loss:60
