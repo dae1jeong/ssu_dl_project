@@ -4,4 +4,6 @@
 1. transforms.ColorJitter(0.2, 0.2, 0.2, 0.1) -> transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
 2. criterion = nn.CrossEntropyLoss(label_smoothing=0.0) -> criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 3. CLAHE적용
+4. drop out 추가
+5. mixup
 
