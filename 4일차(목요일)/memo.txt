@@ -11,3 +11,10 @@ CImage는 CIFAR-100과 해상도는 같지만 배경, 조명, 객체 표현 방�
 | 앙상블         | 미적용                             | **다양한 seed 또는 모델 조합**으로 soft voting 추천                        |
 | 테스트 전략    | 단일 모델 추론                      | **Test-Time Augmentation (TTA)** 적용 가능                               |
 | 모델 선택 기준 | CIFAR-100 test acc 기준          | 여전히 유지하되, **CIFAR에서 일반화 지표도 함께 고려** (예: validation loss + acc 동시에 판단) |
+
+
+
+
+
+CLAHE는 LAB 컬러 공간의 L(밝기) 채널에만 적용되므로, 실제 효과는 어두운 배경에서 대비 향상 효과로 작용합니다.
+→ ColorJitter와 함께 쓰면 밝기·색상 대비에 더 강건한 모델을 만들 수 있습니다.
