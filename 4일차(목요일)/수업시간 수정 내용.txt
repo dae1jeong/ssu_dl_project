@@ -7,3 +7,4 @@
 4. drop out 추가
 5. mixup
 6. TTA 
+7. patience = 25
