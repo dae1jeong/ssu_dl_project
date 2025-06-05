@@ -1,0 +1,5 @@
+박대정
+
+왼쪽 pc에 있는 test4_dj.py 기반으로 수정입니다.
+1. transforms.ColorJitter(0.2, 0.2, 0.2, 0.1) -> transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
+2. criterion = nn.CrossEntropyLoss(label_smoothing=0.0) -> criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
