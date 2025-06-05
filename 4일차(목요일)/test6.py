@@ -1,24 +1,21 @@
-import torch, torchvision, timm, random
+import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
-from torchvision import transforms, datasets, models
-from torch.utils.data import DataLoader, random_split, Dataset
-from tqdm import tqdm
-import os
-import cv2
-from PIL import Image
+from torchvision import datasets, transforms, models
+from torch.utils.data import DataLoader, random_split
 from torch.optim.lr_scheduler import OneCycleLR
-from torch.optim.swa_utils import AveragedModel, SWALR, update_bn
+from tqdm import tqdm
+import random
 
-# Seed 고정
+# 고정 Seed
 seed = 42
 torch.manual_seed(seed)
 torch.cuda.manual_seed_all(seed)
 np.random.seed(seed)
 random.seed(seed)
 
-# Cutout 정의
+# Cutout
 class Cutout(object):
     def __init__(self, n_holes=1, length=8):
         self.n_holes = n_holes
@@ -27,8 +24,7 @@ class Cutout(object):
         h, w = img.size(1), img.size(2)
         mask = np.ones((h, w), np.float32)
         for _ in range(self.n_holes):
-            y = np.random.randint(h)
-            x = np.random.randint(w)
+            y, x = np.random.randint(h), np.random.randint(w)
             y1 = np.clip(y - self.length // 2, 0, h)
             y2 = np.clip(y + self.length // 2, 0, h)
             x1 = np.clip(x - self.length // 2, 0, w)
@@ -58,125 +54,50 @@ def cutmix_data(x, y, alpha=1.0):
     lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (x.size()[-1] * x.size()[-2]))
     return x_cutmix, y_a, y_b, lam
 
-class CLAHETransform:   # CImage의 domain shift를 줄이기 위해 CLAHE 새로 적용.
-    def __init__(self, clip_limit=2.0, tile_grid_size=(8, 8)):
-        self.clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
-
-    def __call__(self, img):
-        img_np = np.array(img)
-        if img_np.ndim == 3 and img_np.shape[2] == 3:
-            lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
-            l, a, b = cv2.split(lab)
-            cl = self.clahe.apply(l)
-            merged = cv2.merge((cl, a, b))
-            img_np = cv2.cvtColor(merged, cv2.COLOR_LAB2RGB)
-        return Image.fromarray(img_np)
-
-# 데이터셋 전처리
-train_transform = transforms.Compose([
-    CLAHETransform(clip_limit=2.0),  # 새로 추가
+# Transform 정의
+transform_train = transforms.Compose([
     transforms.RandomHorizontalFlip(),
     transforms.RandomCrop(32, padding=4),
-    transforms.ColorJitter(0.4, 0.4, 0.4, 0.1),
-    transforms.RandomRotation(10),
     transforms.ToTensor(),
-    transforms.RandomErasing(p=0.25, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0), # 새로 추가 random erasing
     Cutout(n_holes=1, length=8),
-    transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+    transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761))
 ])
-test_transform = transforms.Compose([
-    transforms.Resize((32, 32)),
+transform_test = transforms.Compose([
     transforms.ToTensor(),
-    transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+    transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761))
 ])
 
-# CIFAR-100 데이터셋
-full_train = datasets.CIFAR100(root='./data', train=True, download=True, transform=train_transform)
-val_len = int(len(full_train) * 0.1)
-train_len = len(full_train) - val_len
-train_set, val_set = random_split(full_train, [train_len, val_len])
+# 데이터셋
+train_dataset = datasets.CIFAR100(root='./data', train=True, download=True, transform=transform_train)
+test_dataset = datasets.CIFAR100(root='./data', train=False, download=True, transform=transform_test)
+train_size = int(0.9 * len(train_dataset))
+val_size = len(train_dataset) - train_size
+train_data, val_data = random_split(train_dataset, [train_size, val_size])
 
-test_set_cifar = datasets.CIFAR100(root='./data', train=False, download=True, transform=test_transform)
+train_loader = DataLoader(train_data, batch_size=128, shuffle=True)
+val_loader = DataLoader(val_data, batch_size=128)
+test_loader = DataLoader(test_dataset, batch_size=128)
 
-
-class CustomImageDataset(Dataset):
-    def __init__(self, img_dir, transform=None):
-        self.img_dir = img_dir
-        self.img_list = sorted([
-            f for f in os.listdir(img_dir) 
-            if f.lower().endswith(('.png', '.jpg', '.jpeg'))
-        ])
-        self.transform = transform
-    def __len__(self):
-        return len(self.img_list)
-    def __getitem__(self, idx):
-        img_path = os.path.join(self.img_dir, self.img_list[idx])
-        image = Image.open(img_path).convert('RGB')
-        if self.transform:
-            image = self.transform(image)
-        return image, self.img_list[idx]
-    
-test_dir = "/home/user/deep/dataset/CImages"
-test_set = CustomImageDataset(test_dir, transform=test_transform)
-
-# DataLoader 설정
-batch_size = 256
-train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=4)
-val_loader = DataLoader(val_set, batch_size=batch_size, num_workers=4)
-test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=4)
-test_loader_cifar = DataLoader(test_set_cifar, batch_size=batch_size, shuffle=False, num_workers=4)
-
-        
 # 모델 정의
 class CombinedModel(nn.Module):
     def __init__(self, num_classes=100):
         super().__init__()
-        self.resnet = models.resnet34(weights='DEFAULT')
+        self.resnet = models.resnet18(weights='DEFAULT')
         self.resnet.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-        self.resnet.bn1 = nn.BatchNorm2d(64)
-        self.resnet.relu = nn.ReLU(inplace=True)
         self.resnet.maxpool = nn.Identity()
         self.resnet.fc = nn.Identity()
-        self.efficient = timm.create_model("efficientnet_b0", pretrained=True, num_classes=0)
+        self.efficient = models.efficientnet_b0(weights='DEFAULT')
+        self.efficient.classifier = nn.Identity()
         self.classifier = nn.Sequential(
-            nn.Dropout(p=0.5),  # ✅ Dropout 추가
-            nn.Linear(512 + self.efficient.num_features, num_classes)
-        )  
-
-
+            nn.Dropout(0.5),
+            nn.Linear(512 + 1280, num_classes)
+        )
     def forward(self, x):
         r = self.resnet(x)
         e = self.efficient(x)
-        out = torch.cat([r, e], dim=1)
-        return self.classifier(out)
+        return self.classifier(torch.cat([r, e], dim=1))
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = CombinedModel().to(device)
-
-decay, no_decay = [], []
-for name, param in model.named_parameters():
-    if "bias" in name or "bn" in name or "norm" in name:
-        no_decay.append(param)
-    else:
-        decay.append(param)
-
-optimizer = optim.AdamW([
-    {'params': decay, 'weight_decay': 0.001},
-    {'params': no_decay, 'weight_decay': 0.0}
-], lr=0.001)
-
-epochs = 200
-from torch.optim.lr_scheduler import OneCycleLR
-scheduler = OneCycleLR(
-    optimizer, 
-    max_lr=0.005, 
-    steps_per_epoch=len(train_loader), 
-    epochs=epochs, 
-    pct_start=0.2, 
-    anneal_strategy='cos')
-
-criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
-
+# EarlyStopping 클래스
 class EarlyStopping:
     def __init__(self, patience=25):
         self.patience = patience
@@ -192,54 +113,39 @@ class EarlyStopping:
         if self.counter >= self.patience:
             self.stop = True
 
-early_stopping = EarlyStopping(patience=25)
-
-# 평가함수
-def eval_acc(model, data_loader, device):
+# 정확도 함수
+def eval_acc(model, loader):
     model.eval()
-    correct = 0
-    total = 0
+    correct, total = 0, 0
     with torch.no_grad():
-        for batch in data_loader:
-            images = batch[0].to(device)
-            labels = batch[1]
-            if torch.is_tensor(labels):
-                labels = labels.to(device)
-            else:
-                continue
+        for images, labels in loader:
+            images, labels = images.to(device), labels.to(device)
             outputs = model(images)
             _, preds = outputs.max(1)
             correct += (preds == labels).sum().item()
             total += labels.size(0)
-    return correct / total * 100 if total > 0 else None
+    return 100. * correct / total
 
+# 학습 준비
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = CombinedModel().to(device)
+optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-2)
+scheduler = OneCycleLR(optimizer, max_lr=0.005, steps_per_epoch=len(train_loader), epochs=200)
+criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+early_stopping = EarlyStopping()
 
-
-# 학습 루프
-for epoch in range(epochs):
+# 학습
+for epoch in range(200):
     model.train()
     total_loss, correct, total = 0, 0, 0
     for images, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
         images, labels = images.to(device), labels.to(device)
-        r = np.random.rand(1)
-        if r < 0.2:
-            images, targets_a, targets_b, lam = cutmix_data(images, labels)
+        if random.random() < 0.3:
+            images, y_a, y_b, lam = cutmix_data(images, labels)
             outputs = model(images)
-            loss = lam * criterion(outputs, targets_a) + (1 - lam) * criterion(outputs, targets_b)
+            loss = lam * criterion(outputs, y_a) + (1 - lam) * criterion(outputs, y_b)
             _, preds = outputs.max(1)
-            correct += (lam * (preds == targets_a).sum().item() + (1 - lam) * (preds == targets_b).sum().item())
-
-        elif r < 0.4:
-            # Mixup 새로 추가.
-            lam = np.random.beta(1.0, 1.0)
-            index = torch.randperm(images.size(0)).to(images.device)
-            mixed_images = torch.clamp(lam * images + (1 - lam) * images[index], 0, 1)
-            targets_a, targets_b = labels, labels[index]
-            outputs = model(mixed_images)
-            loss = lam * criterion(outputs, targets_a) + (1 - lam) * criterion(outputs, targets_b)
-            _, preds = outputs.max(1)
-            correct += (lam * (preds == targets_a).sum().item() + (1 - lam) * (preds == targets_b).sum().item())   
-
+            correct += lam * (preds == y_a).sum().item() + (1 - lam) * (preds == y_b).sum().item()
         else:
             outputs = model(images)
             loss = criterion(outputs, labels)
@@ -253,66 +159,33 @@ for epoch in range(epochs):
         total_loss += loss.item()
         total += labels.size(0)
 
-    train_acc = correct / total * 100
-    val_loss = 0
+    train_acc = 100. * correct / total
+
+    # Validation
     model.eval()
+    val_loss, val_correct, val_total = 0, 0, 0
     with torch.no_grad():
         for images, labels in val_loader:
             images, labels = images.to(device), labels.to(device)
             outputs = model(images)
             loss = criterion(outputs, labels)
             val_loss += loss.item()
+            _, preds = outputs.max(1)
+            val_correct += (preds == labels).sum().item()
+            val_total += labels.size(0)
+    val_acc = 100. * val_correct / val_total
+    val_loss /= len(val_loader)
 
+    # Test Accuracy
+    test_acc = eval_acc(model, test_loader)
 
-    val_acc = eval_acc(model, val_loader, device)
-    test_acc = eval_acc(model, test_loader_cifar, device)
-    print(f"Epoch {epoch+1}: Train Acc: {train_acc:.2f}%, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%, Test Acc: {test_acc:.2f}%")
+    print(f"[{epoch+1}] Train Acc: {train_acc:.2f}%, Val Acc: {val_acc:.2f}%, Test Acc: {test_acc:.2f}%")
+
     early_stopping(val_loss)
     if early_stopping.stop:
-        print("Early stopping triggered.")
+        print("⛔ Early stopping triggered.")
         break
 
-# 모델 저장
-torch.save(model.state_dict(), "weight_가반4조_0604.pth")
-print("✅ 모델 저장 완료.pth")
-
-def predict_tta(model, image, device):
-    tta_transforms = [
-        lambda x: x,
-        lambda x: torch.flip(x, dims=[3]),  # horizontal flip
-        lambda x: x * 1.1,                  # brighten
-        lambda x: torch.clamp(x * 0.9, 0, 1), # darken
-    ]
-
-    image = image.unsqueeze(0).to(device)  # shape: [1, 3, 32, 32]
-    preds = []
-
-    model.eval()
-    with torch.no_grad():
-        for t in tta_transforms:
-            img_aug = t(image)
-            output = model(img_aug)
-            preds.append(torch.softmax(output, dim=1))
-
-    avg_pred = torch.stack(preds).mean(dim=0)  # [1, num_classes]
-    final_pred = avg_pred.argmax(dim=1)
-    return final_pred.item()
-
-
-result = []
-
-with torch.no_grad():
-    for images, filenames in tqdm(test_loader, desc="TTA testing"):   # TTA 수정
-        for image, fname in zip(images, filenames):
-            pred = predict_tta(model, image, device)
-            number = int(os.path.splitext(fname)[0])
-            result.append((number, pred))
-
-            
-result = sorted(result, key=lambda x: x[0])
-with open("result_가반4조_0605_tta.txt", "w") as f:
-    f.write("number,label\n")
-    for number, label in result:
-        f.write(f"{str(number).zfill(4)},{label}\n")
-        
-print("✅ 결과 저장 완료: result_가반4조_0604.txt")
+# 저장
+torch.save(model.state_dict(), "final_model.pth")
+print("✅ 모델 저장 완료.")
