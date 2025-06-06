@@ -72,7 +72,7 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20)
 swa_model = AveragedModel(model)
 
 # 학습
-for epoch in range(20):
+for epoch in range(50):
     model.train()
     correct = total = 0
     for images, labels in tqdm(train_loader, desc=f"Epoch {epoch+1} [Train]"):
@@ -120,17 +120,20 @@ torch.save(swa_model.module.state_dict(), "weight_가반4조_0606_tta2.pth")
 # TTA 함수
 def tta_predict(model, image, device):
     model.eval()
-    image = image.to(device)
+    image = image.unsqueeze(0).to(device)  # (1, C, H, W)
+
     flips = [
         image,
-        torch.flip(image, dims=[2]),
-        torch.flip(image, dims=[3]),
-        torch.flip(image, dims=[2, 3])
+        torch.flip(image, dims=[2]),      # H 방향 (세로)
+        torch.flip(image, dims=[3]),      # W 방향 (가로)
+        torch.flip(image, dims=[2, 3])    # 대각 뒤집기
     ]
+
     with torch.no_grad():
-        preds = [model(flip.unsqueeze(0)) for flip in flips]
-        avg_pred = torch.stack(preds).mean(0)
-    return avg_pred.squeeze()
+        preds = [model(f) for f in flips]  # 각 변형 이미지에 대해 예측
+        avg_pred = torch.stack(preds).mean(0)  # 평균 내기
+
+    return avg_pred.squeeze(0)  # (100,)
 
 # 결과 저장
 swa_model.eval()
