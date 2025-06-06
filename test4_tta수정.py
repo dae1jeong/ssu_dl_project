@@ -261,8 +261,8 @@ with torch.no_grad():
 # 정렬 및 저장
 results.sort(key=lambda x: x[0])
 with open("results_가반4조_0605_tta.txt", "w") as f:
-    f.write("number, label\\n")
+    f.write("number, label\n")
     for number, label in results:
-        f.write(f"{str(number).zfill(4)}, {label}\\n")
+        f.write(f"{str(number).zfill(4)}, {label}\n")
 
 print("✅ TTA + AutoAug 결과 저장 완료")
